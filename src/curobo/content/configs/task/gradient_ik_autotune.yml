@@ -65,6 +65,9 @@ cost:
   self_collision_cfg:
     classify: false
     weight: 2140.4341585026104
+  yaw_cfg:
+    weight: 10000.0
+    terminal: false
 lbfgs:
   cold_start_n_iters: null
   cost_convergence: 1.0e-11

@@ -22,6 +22,7 @@ from curobo.rollout.cost.cost_base import CostConfig
 from curobo.rollout.cost.dist_cost import DistCost, DistCostConfig
 from curobo.rollout.cost.pose_cost import PoseCost, PoseCostConfig, PoseCostMetric
 from curobo.rollout.cost.straight_line_cost import StraightLineCost
+from curobo.rollout.cost.yaw_cost import YawCost
 from curobo.rollout.cost.zero_cost import ZeroCost
 from curobo.rollout.dynamics_model.kinematic_model import KinematicModelState
 from curobo.rollout.rollout_base import Goal, RolloutMetrics
@@ -35,6 +36,7 @@ from curobo.util.torch_utils import get_torch_jit_decorator
 
 # Local Folder
 from .arm_base import ArmBase, ArmBaseConfig, ArmCostConfig
+
 
 
 @dataclass
@@ -90,6 +92,7 @@ class ArmReacherCostConfig(ArmCostConfig):
     zero_vel_cfg: Optional[CostConfig] = None
     zero_jerk_cfg: Optional[CostConfig] = None
     link_pose_cfg: Optional[PoseCostConfig] = None
+    yaw_cfg: Optional[CostConfig] = None
 
     @staticmethod
     def _get_base_keys():
@@ -103,6 +106,7 @@ class ArmReacherCostConfig(ArmCostConfig):
             "zero_vel_cfg": CostConfig,
             "zero_jerk_cfg": CostConfig,
             "link_pose_cfg": PoseCostConfig,
+            "yaw_cfg": CostConfig,
         }
         new_k.update(base_k)
         return new_k
@@ -185,6 +189,11 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                     "Deprecated: Add link_pose_cfg to your rollout config. Using pose_cfg instead."
                 )
                 self.cost_cfg.link_pose_cfg = self.cost_cfg.pose_cfg
+
+        # Add yaw cost
+        if self.cost_cfg.yaw_cfg is not None:
+            self.yaw_cost = YawCost(self.cost_cfg.yaw_cfg)
+
         self._link_pose_costs = {}
 
         if self.cost_cfg.link_pose_cfg is not None:
@@ -323,6 +332,19 @@ class ArmReacher(ArmBase, ArmReacherConfig):
                 g_dist,
             )
             cost_list.append(z_vel)
+            
+
+        # Add yaw cost if enabled
+        if self.cost_cfg.yaw_cfg is not None and self.yaw_cost.enabled:
+            with profiler.record_function("cost/yaw"):
+                target_pos_dict = self._goal_buffer.links_goal_pose
+                target_positions = torch.stack([pose.position[0] for pose in target_pos_dict.values()])
+                yaw_cost = self.yaw_cost.forward(
+                    state_batch.position,
+                    target_positions
+                )
+                cost_list.append(yaw_cost)
+
         with profiler.record_function("cat_sum"):
             if self.sum_horizon:
                 cost = cat_sum_horizon_reacher(cost_list)

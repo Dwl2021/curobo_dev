@@ -1,0 +1,124 @@
+robot_cfg:
+  kinematics:
+    use_usd_kinematics: False
+    # usd_path: "FILL_THIS"
+    # usd_robot_root: "/robot"
+    # isaac_usd_path: ""
+    # usd_flip_joints: {}
+    # usd_flip_joint_limits: []
+    urdf_path: robot/x7/x7.urdf
+    asset_root_path: robot/x7
+    usd_path: robot/x7/x7.usd
+    usd_robot_root: "/x7"
+
+    base_link: "base_link"
+    ee_link: "arm_l_link7_1"
+    link_names: ["arm_l_link7_1", "arm_r_link7_1"]
+    collision_link_names: 
+      [
+        "base_link0",
+        "body_link2_1",
+        "arm_l_link1_1",
+        "arm_l_link2_1",
+        "arm_l_link3_1",
+        "arm_l_link4_1",
+        "arm_l_link5_1",
+        "arm_l_link6_1",
+        "arm_l_link7_1",
+        "catch_1_1",
+        "catch_2_1",
+        "arm_r_link1_1",
+        "arm_r_link2_1",
+        "arm_r_link3_1",
+        "arm_r_link4_1",
+        "arm_r_link5_1",
+        "arm_r_link6_1",
+        "arm_r_link7_1",
+        "catch_1_2",
+        "catch_2_2",
+      ]
+    collision_spheres: spheres/collision_x7.yml
+    collision_sphere_buffer: 0.000
+    extra_collision_spheres: {}
+    use_global_cumul: True
+    self_collision_ignore:
+      {
+        "base_link0": ["body_link2_1"],
+        "body_link2_1": ["arm_l_link1_1"],
+        "arm_l_link1_1": ["arm_l_link2_1"],
+        "arm_l_link2_1": ["arm_l_link3_1"],
+        "arm_l_link3_1": ["arm_l_link4_1"],
+        "arm_l_link4_1": ["arm_l_link5_1"],
+        "arm_l_link5_1": ["arm_l_link6_1"],
+        "arm_l_link6_1": ["arm_l_link7_1"],
+        "arm_l_link7_1": ["catch_1_1", "catch_2_1"],
+        "body_link2_1": ["arm_r_link1_1"], 
+        "arm_r_link1_1": ["arm_r_link2_1"],
+        "arm_r_link2_1": ["arm_r_link3_1"],
+        "arm_r_link3_1": ["arm_r_link4_1"],
+        "arm_r_link4_1": ["arm_r_link5_1"],
+        "arm_r_link5_1": ["arm_r_link6_1"],
+        "arm_r_link6_1": ["arm_r_link7_1"],
+        "arm_r_link7_1": ["catch_1_2", "catch_2_2"],
+      }
+    self_collision_buffer:
+      {
+      }
+
+    mesh_link_names: [
+        "base_link0",
+        "body_link2_1",
+        "arm_l_link1_1",
+        "arm_l_link2_1",
+        "arm_l_link3_1",
+        "arm_l_link4_1",
+        "arm_l_link5_1",
+        "arm_l_link6_1",
+        "arm_l_link7_1",
+        "arm_r_link1_1",
+        "arm_r_link2_1",
+        "arm_r_link3_1",
+        "arm_r_link4_1",
+        "arm_r_link5_1",
+        "arm_r_link6_1",
+        "arm_r_link7_1",
+        "catch_1_1",
+        "catch_2_1",
+        "catch_1_2",
+        "catch_2_2",
+      ]
+    # lock_joints: {}
+    lock_joints: {"catch_joint_l_1": -0.04, 
+                  "catch_joint_l_2": 0.04, 
+                  "catch_joint_r_1": 0.04, 
+                  "catch_joint_r_2": -0.04}
+    extra_links: null
+
+    cspace:
+      joint_names: [
+        "base_x",
+        "base_y", 
+        "base_z",
+        "body_joint_1",
+        "arm_joint_l_1",
+        "arm_joint_l_2", 
+        "arm_joint_l_3",
+        "arm_joint_l_4",
+        "arm_joint_l_5",
+        "arm_joint_l_6",
+        "arm_joint_l_7",
+        "arm_joint_r_1",
+        "arm_joint_r_2",
+        "arm_joint_r_3", 
+        "arm_joint_r_4",
+        "arm_joint_r_5",
+        "arm_joint_r_6",
+        "arm_joint_r_7",
+      ]
+      retract_config: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      null_space_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  
+      cspace_distance_weight: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      max_jerk: 1000.0
+      max_acceleration: 1000.0
+planner:
+  frame_bias: [0.0, 0.0, 0.0]
