@@ -428,8 +428,8 @@ namespace Curobo
       float4 quat   = make_float4(quat_4.y, quat_4.z, quat_4.w, quat_4.x);
 
       // read weights:
-      float rotation_weight          = weight[0];
-      float position_weight          = weight[1];
+      float rotation_weight          = weight[0];  // cost weight 
+      float position_weight          = weight[1];  // cost weight
       float r_w_alpha                = weight[2];
       float p_w_alpha                = weight[3];
       bool  reach_offset             = false;
@@ -441,19 +441,21 @@ namespace Curobo
       #pragma unroll 6
       for (int k = 0; k < 6; k++)
       {
-        d_vec_weight[k] = vec_weight[k];
+        d_vec_weight[k] = vec_weight[k]; // all is one, decide the full pose constraint
       }
       //*(float3 *)&d_vec_weight[0] = *(float3 *)&vec_weight[0]; // TODO
       //*(float3 *)&d_vec_weight[3] = *(float3 *)&vec_weight[3];
       float3 offset_rotation = *(float3 *)&offset_waypoint[0];
       float3 offset_position = *(float3 *)&offset_waypoint[3];
 
+      // horizon-1 is the last step, offset_tstep is deactive the constraint
       if ((h_idx < horizon - 1) && (h_idx != horizon - offset_tstep))
       {
         #pragma unroll 6
         for (int k = 0; k < 6; k++)
         {
-          d_vec_weight[k] *= run_vec_weight[k];
+          // only the offset step is deactive the constraint  
+          d_vec_weight[k] *= run_vec_weight[k]; // if grasp, then active the axis, if not any grasp, then all is one
         }
         //*(float3 *)&d_vec_weight[0] *= *(float3 *)&run_vec_weight[0];
         //*(float3 *)&d_vec_weight[3] *= *(float3 *)&run_vec_weight[3];
@@ -461,8 +463,8 @@ namespace Curobo
 
       if (!write_distance)
       {
-        position_weight *= run_weight[h_idx];
-        rotation_weight *= run_weight[h_idx];
+        position_weight *= run_weight[h_idx]; // choose the active step
+        rotation_weight *= run_weight[h_idx]; // choose the active step
         float sum_weight = 0;
 
         #pragma unroll 6

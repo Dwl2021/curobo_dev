@@ -186,7 +186,7 @@ class PoseCost(CostBase, PoseCostConfig):
         if update_offset_waypoint:
             if metric.remove_offset_waypoint:
                 self.remove_offset_waypoint()
-
+           
             if metric.offset_position is not None or metric.offset_rotation is not None:
                 self.update_offset_waypoint(
                     offset_position=metric.offset_position,
@@ -224,7 +224,8 @@ class PoseCost(CostBase, PoseCostConfig):
         self.update_run_weight(
             run_tstep_fraction=offset_tstep_fraction, horizon=self.waypoint_horizon
         )
-
+    
+    
     def remove_offset_waypoint(self):
         self.offset_tstep_fraction[:] = -1.0
         self.update_run_weight(horizon=self.waypoint_horizon)
@@ -241,7 +242,7 @@ class PoseCost(CostBase, PoseCostConfig):
             return
 
         if run_weight is None:
-            run_weight = self.run_weight
+            run_weight = self.run_weight # 1.0
 
         active_steps = math.floor(horizon * run_tstep_fraction)
         self.initialize_run_weight_vec(horizon)
@@ -397,11 +398,11 @@ class PoseCost(CostBase, PoseCostConfig):
             ee_goal_pos,
             ee_rot_batch,  # .view(-1, 4).contiguous(),
             ee_goal_rot,
-            self.vec_weight,
-            self.weight,
-            self._vec_convergence,
-            self._run_weight_vec,
-            self.run_vec_weight,
+            self.vec_weight, # the choose of the whole pose constriant
+            self.weight, # the weight
+            self._vec_convergence, 
+            self._run_weight_vec, # the time step active the continuous grasp pose
+            self.run_vec_weight,  # the activate axis of the continuous grasp pose
             self.offset_waypoint,
             self.offset_tstep_fraction,
             goal.batch_pose_idx,
@@ -450,11 +451,11 @@ class PoseCost(CostBase, PoseCostConfig):
             ee_goal_pos,
             ee_rot_batch,  # .view(-1, 4).contiguous(),
             ee_goal_rot,
-            self.vec_weight,
-            self.weight,
-            self._vec_convergence,
-            self._run_weight_vec,
-            self.run_vec_weight,
+            self.vec_weight, # vec_weight # decide the full pose constraint
+            self.weight,  # cost weight
+            self._vec_convergence, 
+            self._run_weight_vec, # run_weight # active step
+            self.run_vec_weight, # run_vec_weight # active axis
             self.offset_waypoint,
             self.offset_tstep_fraction,
             goal.batch_pose_idx,
