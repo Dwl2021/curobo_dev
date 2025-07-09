@@ -684,9 +684,9 @@ class TrajOptSolver(TrajOptSolverConfig):
         """
         if self._rollout_list is None:
             self._rollout_list = [
-                self.rollout_fn,
+                self.rollout_fn, # aux_rollout_fn
                 self.interpolate_rollout,
-            ] + self.solver.get_all_rollout_instances()
+            ] + self.solver.get_all_rollout_instances() # rollout_fn in trajopt and mppi
         return self._rollout_list
 
     def get_all_kinematics_instances(self) -> List[CudaRobotModel]:

@@ -4425,3 +4425,274 @@ class MotionGen(MotionGenConfig):
         result.retract_interpolation_dt = retract_grasp_mg_result.interpolation_dt
 
         return result
+
+    def plan_grasp_with_waypoints(
+        self,
+        start_state: JointState,
+        grasp_poses: Pose,
+        plan_config: MotionGenPlanConfig,
+        grasp_approach_offset: Pose = Pose.from_list([0, 0, -0.15, 1, 0, 0, 0]),
+        disable_collision_links: List[str] = [],
+        grasp_approach_constraint_in_goal_frame: bool = True,
+    ) -> GraspPlanResult:
+        
+        """Plan a sequence of motions to grasp an object, given a set of grasp poses.
+
+        This function plans three motions, first approaches the object with an offset, then
+        moves with linear constraints to the grasp pose, and finally retracts the arm base to
+        offset with linear constraints. During the linear constrained motions, collision between
+        disable_collision_links and the world is disabled. This disabling is useful to enable
+        contact between a robot's gripper links and the object.
+
+        This method takes a set of grasp poses and finds the best grasp pose to reach based on a
+        goal set trajectory optimization problem. In this problem, the robot needs to reach one
+        of the poses in the grasp_poses set at the terminal state. To allow for in-contact grasps,
+        collision between disable_collision_links and world is disabled during the optimization.
+        The best grasp pose is then used to plan the three motions.
+
+        Args:
+            start_state: Start joint state for planning.
+            grasp_poses: Set of grasp poses, represented with :class:~curobo.math.types.Pose, of
+                shape (1, num_grasps, 7).
+            plan_config: Planning parameters for motion generation.
+            grasp_approach_offset: Offset pose from the grasp pose. Reference frame is the grasp
+                pose frame if grasp_approach_constraint_in_goal_frame is True, otherwise the
+                reference frame is the robot base frame.
+            grasp_approach_path_constraint: Path constraint for the approach to grasp pose and
+                grasp to retract path. This is a list of 6 values, where each value is a weight
+                for each Cartesian dimension. The first three are for orientation and the last
+                three are for position. If None, no path constraint is applied.
+            retract_offset: Retract offset pose from grasp pose. Reference frame is the grasp pose
+                frame if retract_constraint_in_goal_frame is True, otherwise the reference frame is
+                the robot base frame.
+            retract_path_constraint: Path constraint for the retract path. This is a list of 6
+                values, where each value is a weight for each Cartesian dimension. The first three
+                are for orientation and the last three are for position. If None, no path
+                constraint is applied.
+            disable_collision_links: Name of links to disable collision with the world during
+                the approach to grasp and grasp to retract path.
+            plan_approach_to_grasp: If True, planning also includes moving from approach to
+                grasp. If False, a plan to reach offset of the best grasp pose is returned.
+            plan_grasp_to_retract: If True, planning also includes moving from grasp to retract.
+                If False, only a plan to reach the best grasp pose is returned.
+            grasp_approach_constraint_in_goal_frame: If True, the grasp approach offset is in the
+                grasp pose frame. If False, the grasp approach offset is in the robot base frame.
+                Also applies to grasp_approach_path_constraint.
+            retract_constraint_in_goal_frame: If True, the retract offset is in the grasp pose
+                frame. If False, the retract offset is in the robot base frame. Also applies to
+                retract_path_constraint.
+
+        Returns:
+            GraspPlanResult: Result of planning. Use :meth:`GraspPlanResult.grasp_trajectory` to
+                get the trajectory to reach the grasp pose and
+                :meth:`GraspPlanResult.retract_trajectory` to get the trajectory to retract from
+                the grasp pose.
+        """
+
+        if plan_config.pose_cost_metric is not None:
+            log_error("plan_config.pose_cost_metric should be None")
+        self.toggle_link_collision(disable_collision_links, True)
+        result = GraspPlanResult()
+        goalset_motion_gen_result = self.plan_goalset(
+            start_state,
+            grasp_poses,
+            plan_config,
+        )
+        result.success = goalset_motion_gen_result.success.clone()
+        result.success[:] = False
+        result.goalset_result = goalset_motion_gen_result
+        if not goalset_motion_gen_result.success.item():
+            result.status = "No grasp in goal set was reachable."
+            return result
+        result.goalset_index = goalset_motion_gen_result.goalset_index.clone()
+
+        # plan to offset:
+        goal_index = goalset_motion_gen_result.goalset_index.item()
+        goal_pose = grasp_poses.get_index(0, goal_index).clone()
+        if grasp_approach_constraint_in_goal_frame:
+            offset_goal_pose = goal_pose.clone().multiply(grasp_approach_offset)
+        else:
+            offset_goal_pose = grasp_approach_offset.clone().multiply(goal_pose.clone())
+
+        reach_offset_mg_result = self.plan_single(
+            start_state,
+            offset_goal_pose,
+            plan_config.clone(),
+        )
+        result.approach_result = reach_offset_mg_result
+        if not reach_offset_mg_result.success.item():
+            result.status = f"Planning to Approach pose failed: {reach_offset_mg_result.status}"
+            return result
+
+
+        offset_start_state = reach_offset_mg_result.optimized_plan[-1].unsqueeze(0)
+        reach_grasp_mg_result = self.plan_single(
+            offset_start_state,
+            goal_pose,
+            plan_config,
+        )
+        result.grasp_result = reach_grasp_mg_result
+        if not reach_grasp_mg_result.success.item():
+            result.status = (
+                f"Planning from Approach to Grasp Failed: {reach_grasp_mg_result.status}"
+            )
+            return result
+
+        # Get stitched trajectory:
+
+        offset_dt = reach_offset_mg_result.optimized_dt
+        grasp_dt = reach_grasp_mg_result.optimized_dt
+        if offset_dt > grasp_dt:
+            # retime grasp trajectory to match offset trajectory:
+            grasp_time_dilation = grasp_dt / offset_dt
+
+            reach_grasp_mg_result.retime_trajectory(
+                grasp_time_dilation,
+                interpolate_trajectory=True,
+            )
+        else:
+            offset_time_dilation = offset_dt / grasp_dt
+
+            reach_offset_mg_result.retime_trajectory(
+                offset_time_dilation,
+                interpolate_trajectory=True,
+            )
+
+        if (reach_offset_mg_result.optimized_dt - reach_grasp_mg_result.optimized_dt).abs() > 0.01:
+            reach_offset_mg_result.success[:] = False
+            if reach_offset_mg_result.debug_info is None:
+                reach_offset_mg_result.debug_info = {}
+            reach_offset_mg_result.debug_info["plan_single_grasp_status"] = (
+                "Stitching Trajectories Failed"
+            )
+            return reach_offset_mg_result, None
+
+        result.grasp_trajectory = reach_offset_mg_result.optimized_plan.stack(
+            reach_grasp_mg_result.optimized_plan
+        ).clone()
+
+        result.grasp_trajectory_dt = reach_offset_mg_result.optimized_dt
+
+        result.grasp_interpolated_trajectory = (
+            reach_offset_mg_result.get_interpolated_plan()
+            .stack(reach_grasp_mg_result.get_interpolated_plan())
+            .clone()
+        )
+        result.grasp_interpolation_dt = reach_offset_mg_result.interpolation_dt
+
+        # update trajectories in results:
+        result.planning_time = (
+            reach_offset_mg_result.total_time
+            + reach_grasp_mg_result.total_time
+            + goalset_motion_gen_result.total_time
+        )
+
+        # check if retract path is required:
+        result.success[:] = True
+        return result
+
+    def plan_with_waypoints(
+        self,
+        start_state: JointState,
+        waypoints: List[Pose],
+        plan_config: MotionGenPlanConfig,
+        disable_collision_links: List[str] = [],
+    ) -> MotionGenResult:
+        """Plan a sequence of motions through multiple waypoints in robot base frame.
+
+        This function plans a sequence of motions that moves through all the specified waypoints
+        in order. The waypoints are specified in the robot base frame. The function will plan
+        trajectories between consecutive waypoints and stitch them together while ensuring smooth
+        transitions.
+
+        Args:
+            start_state: Start joint state for planning.
+            waypoints: List of waypoint poses in robot base frame, each represented with 
+                :class:~curobo.math.types.Pose.
+            plan_config: Planning parameters for motion generation.
+            disable_collision_links: Name of links to disable collision with the world during
+                the motion planning.
+
+        Returns:
+            MotionGenResult: Result of planning containing the stitched trajectory through all waypoints.
+                The trajectory will be stored in optimized_plan and interpolated_plan fields.
+        """
+        if plan_config.pose_cost_metric is not None:
+            log_error("plan_config.pose_cost_metric should be None")
+        
+        if len(waypoints) == 0:
+            result = MotionGenResult()
+            result.success = torch.zeros(1, dtype=torch.bool)
+            result.status = "NO_WAYPOINTS"
+            return result
+
+        self.toggle_link_collision(disable_collision_links, True)
+        
+        # Initialize result
+        result = MotionGenResult()
+        result.success = torch.zeros(1, dtype=torch.bool)
+        total_planning_time = 0.0
+
+        # Plan first segment from start to first waypoint
+        current_state = start_state
+        current_result = self.plan_single(
+            current_state,
+            waypoints[0],
+            plan_config.clone(),
+        )
+        
+        if not current_result.success.item():
+            result.status = f"WAYPOINT_0_FAILED"
+            return result
+
+        # Store first segment
+        results = [current_result]
+        total_planning_time += current_result.total_time
+
+        # Plan through remaining waypoints
+        for i in range(1, len(waypoints)):
+            # Start from end of previous trajectory
+            current_state = current_result.optimized_plan[-1].unsqueeze(0)
+            
+            # Plan to next waypoint
+            current_result = self.plan_single(
+                current_state,
+                waypoints[i],
+                plan_config,
+            )
+
+            if not current_result.success.item():
+                result.status = f"WAYPOINT_{i}_FAILED"
+                return result
+
+            # Store result
+            results.append(current_result)
+            total_planning_time += current_result.total_time
+
+        # Find maximum dt among all trajectories
+        max_dt = max(r.optimized_dt for r in results)
+        
+        # Retime all trajectories to use max_dt
+        for i in range(len(results)):
+            if results[i].optimized_dt < max_dt:
+                time_dilation = results[i].optimized_dt / max_dt  # This will be < 1.0
+                results[i].retime_trajectory(
+                    time_dilation,
+                    interpolate_trajectory=True,
+                )
+
+        # Stitch all trajectories
+        result.optimized_plan = results[0].optimized_plan
+        result.interpolated_plan = results[0].get_interpolated_plan()
+        for i in range(1, len(results)):
+            result.optimized_plan = result.optimized_plan.stack(results[i].optimized_plan)
+            result.interpolated_plan = result.interpolated_plan.stack(results[i].get_interpolated_plan())
+
+        # Set final results
+        result.optimized_dt = max_dt
+        result.interpolation_dt = results[-1].interpolation_dt
+        result.total_time = total_planning_time
+        result.success[:] = True
+        result.status = None
+
+        return result
