@@ -47,6 +47,7 @@ class PoseCostConfig(CostConfig):
     offset_waypoint: List[float] = None
     offset_tstep_fraction: float = -1.0
     waypoint_horizon: int = 0
+    preserve_offset_waypoints: int = 100
 
     def __post_init__(self):
         if self.run_vec_weight is not None:
@@ -64,12 +65,13 @@ class PoseCostConfig(CostConfig):
                 2, device=self.tensor_args.device, dtype=self.tensor_args.dtype
             )
         if self.offset_waypoint is None:
-            self.offset_waypoint = [0, 0, 0, 0, 0, 0]
+            self.offset_waypoint = [0, 0, 0, 0, 0, 0] * self.preserve_offset_waypoints
         if self.run_weight is None:
             self.run_weight = 1
         self.offset_waypoint = self.tensor_args.to_device(self.offset_waypoint)
         if isinstance(self.offset_tstep_fraction, float):
-            self.offset_tstep_fraction = self.tensor_args.to_device([self.offset_tstep_fraction])
+            self.offset_tstep_fraction = self.tensor_args.to_device([self.preserve_offset_waypoints]
+                                        +[self.offset_tstep_fraction]*self.preserve_offset_waypoints)
         return super().__post_init__()
 
 
@@ -83,10 +85,11 @@ class PoseCostMetric:
     reach_vec_weight: Optional[torch.Tensor] = None
     offset_position: Optional[torch.Tensor] = None
     offset_rotation: Optional[torch.Tensor] = None
-    offset_tstep_fraction: float = -1.0
+    offset_tstep_fraction: List[float] = None
     remove_offset_waypoint: bool = False
     include_link_pose: bool = False
     project_to_goal_frame: Optional[bool] = None
+    reach_offset_waypoint: bool = False
 
     def clone(self):
 
@@ -137,6 +140,7 @@ class PoseCostMetric:
         hold_vec_weight[:] = 0.0
         offset_position_vec = tensor_args.to_device([0.0, 0.0, 0.0])
         offset_position_vec[linear_axis] = offset_position
+        tstep_fraction = [1.0, tstep_fraction]
         return cls(
             hold_partial_pose=True,
             hold_vec_weight=hold_vec_weight,
@@ -147,38 +151,57 @@ class PoseCostMetric:
     @classmethod
     def create_offset_waypoint_metric(
         cls,
-        offset_position: Optional[List[float]] = None,
-        offset_rotation: Optional[List[float]] = None,
-        tstep_fraction: float = -1.0,
+        offset_position: Optional[torch.Tensor] = None,
+        offset_rotation: Optional[torch.Tensor] = None,
+        tstep_fraction: List[float] = None,
         tensor_args: TensorDeviceType = TensorDeviceType(),
     ) -> PoseCostMetric:
-        """Enables moving to a pregrasp and then locked orientation movement to final grasp.
+        """Creates a metric for trajectory optimization with multiple offset waypoints.
 
         Since this is added as a cost, the trajectory will not reach the exact offset, instead it
-        will try to take a blended path to the final grasp without stopping at the offset.
+        will try to take a blended path through the waypoints to the final goal.
 
         Args:
-            offset_position: offset in meters.
-            linear_axis: specifies the x y or z axis.
-            tstep_fraction:  specifies the timestep fraction to start activating this constraint.
-            project_to_goal_frame: compute distance w.r.t. to goal frame instead of robot base
-                frame. If None, it will use value set in PoseCostConfig.
-            tensor_args: cuda device.
+            offset_position: Offset positions in meters, must be a tensor of shape (n,3) where n is 
+                number of waypoints. Each row represents [x,y,z] offset from goal position.
+            offset_rotation: Offset rotations in radians, must be a tensor of shape (n,3) where n is
+                number of waypoints. Each row represents [rx,ry,rz] offset from goal orientation.
+            tstep_fraction: List of fractions (between 0 and 1) specifying the offset distance from goal pose,
+                must be in descending order. For example [0.8, 0.5] means first waypoint is at 80% offset
+                distance from goal pose and second waypoint is at 50% offset distance. Larger values mean
+                waypoints are further from the goal pose.
+            tensor_args: Tensor device configuration.
 
         Returns:
-            cost metric.
+            PoseCostMetric configured with the specified waypoints.
         """
         hold_vec_weight = tensor_args.to_device([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        if tstep_fraction == -1.0:
+        if tstep_fraction is None:
             log_error("tstep_fraction is required")
-        if offset_position is None:
-            log_error("offset_position is required")
-        if offset_rotation is None:
-            log_error("offset_rotation is required")
+        if offset_position is None or not isinstance(offset_position, torch.Tensor):
+            log_error("offset_position is required and must be a tensor")
+        if offset_rotation is None or not isinstance(offset_rotation, torch.Tensor):
+            log_error("offset_rotation is required and must be a tensor")
+        
         offset_position = tensor_args.to_device(offset_position)
         offset_rotation = tensor_args.to_device(offset_rotation)
+        if isinstance(tstep_fraction, list):
+            if len(tstep_fraction) == 0:
+                log_error("tstep_fraction list cannot be empty")
+            # check if all values are less than 1 and in descending order
+            if not all(0 <= x <= 1 for x in tstep_fraction) or \
+                not all(tstep_fraction[i] >= tstep_fraction[i+1] for i in range(len(tstep_fraction)-1)):
+                log_error("tstep_fraction values must be between 0 and 1 and in descending order")
+            tstep_fraction = [len(tstep_fraction), *tstep_fraction]
+        else:
+            log_error("tstep_fraction must be a list or a float")
+        
+        if tstep_fraction[0] != offset_position.shape[0] or tstep_fraction[0] != offset_rotation.shape[0]:
+            log_error(f"Number of waypoints ({tstep_fraction[0]}) must match first dimension of offset \
+                tensors ({offset_position.shape[0]}, {offset_rotation.shape[0]})")
+        
         return cls(
-            hold_partial_pose=True,
+            reach_offset_waypoint=True,
             hold_vec_weight=hold_vec_weight,
             offset_position=offset_position,
             offset_rotation=offset_rotation,
@@ -214,6 +237,10 @@ class PoseCost(CostBase, PoseCostConfig):
             if metric.hold_vec_weight is None:
                 log_error("hold_vec_weight is required")
             self.hold_partial_pose(metric.hold_vec_weight)
+        if metric.reach_offset_waypoint:
+            if metric.offset_position is None or metric.offset_rotation is None:
+                log_error("offset_position and offset_rotation are required")
+                self.hold_partial_pose(metric.hold_vec_weight)
         if metric.release_partial_pose:
             self.release_partial_pose()
         if metric.reach_partial_pose:
@@ -253,24 +280,30 @@ class PoseCost(CostBase, PoseCostConfig):
         self,
         offset_position: Optional[torch.Tensor] = None,
         offset_rotation: Optional[torch.Tensor] = None,
-        offset_tstep_fraction: float = 0.75,
+        offset_tstep_fraction: List[float] = None,
     ):
         if offset_position is not None:
-            self.offset_waypoint[3:].copy_(offset_position)
+            for i in range(offset_position.shape[0]):
+                self.offset_waypoint[i*6 + 3:i*6 + 6].copy_(offset_position[i])
         if offset_rotation is not None:
-            self.offset_waypoint[:3].copy_(offset_rotation)
-        self.offset_tstep_fraction[:] = offset_tstep_fraction
+            for i in range(offset_rotation.shape[0]):
+                self.offset_waypoint[i*6:i*6 + 3].copy_(offset_rotation[i])
+        if isinstance(offset_tstep_fraction, list):
+            num_wps = offset_tstep_fraction[0]
+            self.offset_tstep_fraction[:num_wps+1] = torch.tensor(offset_tstep_fraction, 
+                                                         device=self.tensor_args.device, 
+                                                         dtype=self.tensor_args.dtype)
+            
         if self.waypoint_horizon <= 0:
             log_error(
                 "Updating offset waypoint requires PoseCostConfig.waypoint_horizon to be set."
             )
         self.update_run_weight(
-            run_tstep_fraction=offset_tstep_fraction, horizon=self.waypoint_horizon
+            run_tstep_fraction=offset_tstep_fraction[1], horizon=self.waypoint_horizon
         )
     
-    
     def remove_offset_waypoint(self):
-        self.offset_tstep_fraction[:] = -1.0
+        self.offset_tstep_fraction[1:] = -1.0
         self.update_run_weight(horizon=self.waypoint_horizon)
 
     def update_run_weight(
@@ -431,7 +464,6 @@ class PoseCost(CostBase, PoseCostConfig):
         ee_goal_rot = goal_pose.quaternion
         num_goals = goal_pose.n_goalset
         self._update_cost_type(ee_goal_pos, ee_pos_batch, num_goals)
-
         b, h, _ = ee_pos_batch.shape
 
         self.update_batch_size(b, h)
@@ -488,7 +520,6 @@ class PoseCost(CostBase, PoseCostConfig):
         self.update_batch_size(b, h)
         # return self.out_distance
         # print(b,h, ee_goal_pos.shape)
-
         distance = PoseError.apply(
             ee_pos_batch,
             ee_goal_pos,
@@ -542,7 +573,6 @@ class PoseCost(CostBase, PoseCostConfig):
         b = query_pose.position.shape[0]
         h = query_pose.position.shape[1]
         num_goals = 1
-
         distance = PoseError.apply(
             query_pose.position,
             ee_goal_pos,

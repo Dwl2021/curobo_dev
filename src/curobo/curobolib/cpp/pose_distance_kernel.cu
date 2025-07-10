@@ -433,23 +433,35 @@ namespace Curobo
       float r_w_alpha                = weight[2];
       float p_w_alpha                = weight[3];
       bool  reach_offset             = false;
-      const float offset_tstep_ratio = offset_tstep_fraction[0];
-      int offset_tstep               = floorf(offset_tstep_ratio * horizon); // if offset_tstep
-                                                                                // is ? horizon, not
-                                                                                // in this mode
+      // const float offset_tstep_ratio = offset_tstep_fraction[0];
+      // int offset_tstep               = floorf(offset_tstep_ratio * horizon); // if offset_tstep
+      //                                                                           // is ? horizon, not
+      //                                                                           // in this mode
       float d_vec_weight[6] = { 0.0 };
       #pragma unroll 6
       for (int k = 0; k < 6; k++)
       {
         d_vec_weight[k] = vec_weight[k]; // all is one, decide the full pose constraint
       }
-      //*(float3 *)&d_vec_weight[0] = *(float3 *)&vec_weight[0]; // TODO
-      //*(float3 *)&d_vec_weight[3] = *(float3 *)&vec_weight[3];
-      float3 offset_rotation = *(float3 *)&offset_waypoint[0];
-      float3 offset_position = *(float3 *)&offset_waypoint[3];
 
-      // horizon-1 is the last step, offset_tstep is deactive the constraint
-      if ((h_idx < horizon - 1) && (h_idx != horizon - offset_tstep))
+      float3 offset_rotation = make_float3(0, 0, 0);
+      float3 offset_position = make_float3(0, 0, 0);
+      int num_waypoints = offset_tstep_fraction[0];
+      
+      if (num_waypoints > 0) {
+        // Find the appropriate waypoint based on horizon step
+        for (int i = 0; i < num_waypoints; i++) {
+          int offset_tstep = floorf(offset_tstep_fraction[i + 1] * horizon);
+          if (h_idx == horizon - offset_tstep) {
+            reach_offset = true;
+            offset_rotation = *(float3 *)&offset_waypoint[i * 6];
+            offset_position = *(float3 *)&offset_waypoint[i * 6 + 3];
+            break;
+          }
+        }
+      }
+
+      if ((h_idx < horizon - 1) && !reach_offset)
       {
         #pragma unroll 6
         for (int k = 0; k < 6; k++)
@@ -479,10 +491,10 @@ namespace Curobo
         }
       }
 
-      if ((horizon > 1) && (offset_tstep >= 0 && (h_idx == horizon - offset_tstep)))
-      {
-        reach_offset = true;
-      }
+      // if ((horizon > 1) && (offset_tstep >= 0 && (h_idx == horizon - offset_tstep)))
+      // {
+      //   reach_offset = true;
+      // }
 
       float3 l_goal_position;
       float4 l_goal_quat;

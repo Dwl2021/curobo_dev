@@ -2214,7 +2214,8 @@ class MotionGen(MotionGenConfig):
         rollouts = self.get_all_pose_rollout_instances()
 
         # check if constraint is valid:
-        if metric.hold_partial_pose and metric.offset_tstep_fraction < 0.0:
+        if metric.hold_partial_pose and (not isinstance(metric.offset_tstep_fraction, list) 
+                                         and metric.offset_tstep_fraction < 0.0):
             start_pose = self.compute_kinematics(start_state).ee_pose.clone()
             project_distance = metric.project_to_goal_frame
             if project_distance is None:
